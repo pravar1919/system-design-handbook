@@ -6,6 +6,64 @@
 
 ---
 
+## First, an everyday analogy (no tech required)
+
+Picture a busy **supermarket on a Saturday afternoon**.
+
+Hundreds of shoppers finish at the same time and head for the checkout. If there were only **one cashier**, the line would stretch to the back of the store, the cashier would burn out, and if that one cashier went on break, *checkout would stop completely*. That single cashier is a website running on **one server** — it works fine until it gets popular, and then everyone suffers.
+
+So the store hires **many cashiers**, and — this is the important part — puts a friendly **greeter at the front of the lanes** whose only job is to look at all the lines and say *"You there — lane 3 is free, go!"*
+
+That greeter is a **load balancer**.
+
+```
+        ONE cashier (no load balancer)        MANY cashiers + a greeter (load balancer)
+        ------------------------------        -----------------------------------------
+
+           🧍 🧍 🧍 🧍 🧍 🧍 🧍                          🧍🧍🧍🧍🧍🧍🧍
+                  |                                          |
+                  v                                   👋  "Lane 3 is open!"
+               [ 💵 ]   <- one tired cashier         (the greeter = load balancer)
+              one long line,                          /        |        \
+              everyone waits,                    [ 💵 ]      [ 💵 ]      [ 💵 ]
+              break = store closed              cashier 1   cashier 2   cashier 3
+                                               short lines, nobody waits long,
+                                               one on break? others keep going
+```
+
+*The shoppers are **requests** from users. The cashiers are your **servers**. The greeter who directs each shopper to a free lane is the **load balancer**. No single cashier gets crushed, and if one steps away the line keeps moving.*
+
+Now notice how naturally the real concepts fall out of this one picture:
+
+| In the supermarket… | …in a real system | The technical term |
+|----------------------|-------------------|--------------------|
+| A shopper ready to pay | A user's request | **Request / client** |
+| A cashier | One server | **Backend / server** |
+| The greeter at the front | The thing spreading the work | **Load balancer** |
+| "Go to the next lane in order" | Rotate through servers evenly | **Round robin** |
+| "Go to the shortest line" | Pick the least-busy server | **Least connections** |
+| "Cash only → lane 1, Card → lane 2" | Send certain requests to certain servers | **Layer 7 (content-based) routing** |
+| Cashier puts up a "closed" sign | Server is down, stop sending to it | **Health check** |
+| "Always use the *same* cashier who knows your coupons" | Keep a user pinned to one server | **Sticky session** |
+| What if the *greeter* faints? | The director itself fails | **LB is a single point of failure** |
+
+That last row is the punchline beginners miss: if the **greeter faints**, the whole front of the store jams even though every cashier is fine. So smart stores keep a **second greeter ready to step in**. In systems, you *always run a backup load balancer* for exactly this reason.
+
+```mermaid
+flowchart TD
+    A[🧍 Shopper arrives ready to pay] --> G{👋 Greeter at the front<br/>looks at all the lanes}
+    G -->|Lane 1 is free| C1[💵 Cashier 1]
+    G -->|Lane 2 is shortest| C2[💵 Cashier 2]
+    G -->|Lane 3 just opened| C3[💵 Cashier 3]
+    C2 -. on break / closed sign .-> G
+```
+
+*The greeter (load balancer) checks every lane before sending each shopper, and notices when a cashier puts up a "closed" sign so nobody is sent to an empty lane.*
+
+Keep this supermarket in your head for the rest of the chapter — every technical term below maps back to it.
+
+---
+
 ## Learning objectives
 
 By the end of this chapter you will be able to:
