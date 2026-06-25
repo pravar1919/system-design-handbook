@@ -135,6 +135,52 @@ flowchart LR
 
 ### Layer 4 vs Layer 7
 
+#### The everyday analogy: two kinds of greeter
+
+Remember our supermarket greeter from the top of the chapter? It turns out there are **two styles of greeter**, and the difference is exactly the difference between L4 and L7.
+
+**The fast greeter (Layer 4).** This greeter never looks in your cart. They just glance at the lanes, count heads, and point: *"You — lane 3."* They don't know or care whether you're buying milk, medicine, or a TV. Because they make a snap decision without inspecting anything, they're **incredibly fast** and can wave through enormous crowds. But they can't be clever — they can't send prescriptions to the pharmacy counter, because they never looked.
+
+**The smart greeter (Layer 7).** This greeter actually **peeks into your cart** before directing you: *"Only 2 items? Express lane. A prescription? Pharmacy counter. A return? Customer-service desk."* This routing is much smarter and more helpful — but peeking into every cart takes a moment, so this greeter is **slower** and does more work per shopper.
+
+```
+   FAST greeter = Layer 4                 SMART greeter = Layer 7
+   ---------------------                  -----------------------
+        🧍 (cart hidden)                       🧍 (cart inspected)
+          |                                       |
+   "Lane 3, go!"  <- doesn't look          👀 "2 items → express,
+          |          inside the cart              prescription → pharmacy"
+          v                                       |
+     any free lane                          the RIGHT lane for what
+   (fast, but not picky)                    you're carrying (smart, but slower)
+```
+
+*The fast greeter (L4) routes you by glancing at the lines only — quick, but it never inspects what you're buying. The smart greeter (L7) opens the cart and sends you to the lane that fits its contents — slower, but it can route intelligently.*
+
+```mermaid
+flowchart TD
+    S[🧍 Shopper with a cart]
+    S --> L4{L4: fast greeter<br/>does NOT look in cart}
+    S --> L7{L7: smart greeter<br/>looks in the cart 👀}
+    L4 -->|just 'next free lane'| Any[Any open lane]
+    L7 -->|2 items| Exp[Express lane]
+    L7 -->|prescription| Pharm[Pharmacy counter]
+    L7 -->|return| CS[Customer service]
+```
+
+*Same shoppers, two greeters. L4 decides without inspecting (fast, content-blind). L7 inspects the cart's contents and routes accordingly (smart, content-aware).*
+
+The mapping back to the real terms:
+
+| Supermarket | Load balancer | Why it matters |
+|-------------|---------------|----------------|
+| Greeter doesn't open the cart | L4 reads only IP + port, **not** the payload | Very fast, works for *any* kind of traffic, even non-web |
+| Greeter peeks inside the cart | L7 reads the URL, headers, cookies | Can route `/images` vs `/api`, but must parse each request |
+| "Pick a lane and stick with it" | L4 pins a whole **connection** to one server | Simple, but can't rebalance mid-connection |
+| Decides fresh for each shopper | L7 routes **each request** independently | Flexible, enables smart features (caching, rewrites) |
+
+With that picture in mind, here are the precise definitions.
+
 Load balancers operate at one of two layers of the network stack, and this is the single most important classification.
 
 **Layer 4 (transport layer) load balancing** works at the TCP/UDP level. It makes routing decisions using only IP addresses and ports — it does **not** look inside the request payload. It forwards packets (or proxies TCP connections) to a chosen backend.
@@ -221,6 +267,47 @@ If everything flows through one load balancer, that box is now your single point
 
 - **Local (server) load balancing** distributes traffic within a single data center / region across server instances — the focus of this chapter.
 - **Global server load balancing (GSLB)** distributes traffic *across regions*, usually via DNS or anycast, to send users to the nearest or healthiest region and to fail over an entire region. In a full HLD you typically layer GSLB (geo routing) on top of regional load balancers (server selection).
+
+### Load balancer vs API gateway
+
+These two get confused constantly because both sit "in front of" your servers — but they answer different questions.
+
+- A **load balancer** answers: *"I have many identical copies of a service — which copy should this request go to?"* Its job is **distribution** (spread load) and **availability** (route around dead copies). It generally does not care *what* the request is.
+- An **API gateway** answers: *"This is an API request — what should happen to it before it reaches a service?"* Its job is **API management**: routing to the *right* service, authentication/authorization, rate limiting, request/response transformation, API keys, and aggregating calls. It is opinionated about *what* the request is.
+
+Back to the supermarket: the **load balancer is the greeter** sending you to a free lane. The **API gateway is the customer-service desk** — it checks your membership card (auth), enforces "10 items or fewer" (rate limiting), handles returns and special requests (transformation), and *then* points you to the correct department. Different jobs, often both present.
+
+#### So which comes first — load balancer or API gateway?
+
+In the common setup: **the load balancer comes first, then the API gateway.** The gateway is itself a horizontally-scaled service (many instances), so it needs a load balancer in front of it to spread traffic and survive an instance failing. Then the gateway, after doing auth/rate-limiting/routing, forwards to the right backend service — usually through *another* layer of load balancing.
+
+So load balancing typically happens **twice**: once *into* the gateway, and again *out of* it toward the services.
+
+```mermaid
+flowchart LR
+    C[Client] --> LB[Load Balancer<br/>spread + failover]
+    LB --> GW[API Gateway<br/>auth · rate limit · route]
+    GW --> LB2[LB / service discovery]
+    LB2 --> S1[Orders service]
+    LB2 --> S2[Users service]
+    LB2 --> S3[Payments service]
+```
+
+*Edge load balancer first (distributes across gateway instances), then the gateway applies API policy and routes to the correct service — itself load-balanced across that service's replicas.*
+
+> ⚠️ This ordering is a common convention, not a law. Some API gateways have a built-in load balancer (so you don't run a separate one in front). Cloud L7 load balancers (AWS ALB, GCP HTTPS LB) absorb *some* gateway features (path routing, TLS, basic authn), blurring the line. And internally a gateway does its own load balancing to upstreams. Think in terms of *responsibilities* (distribute vs. manage), not box order.
+
+| | Load balancer | API gateway |
+|---|---------------|-------------|
+| **Core question** | Which identical server? | What to do with this API request? |
+| **Primary job** | Distribute load, failover | Routing, auth, rate limiting, transformation |
+| **Aware of request content?** | L4: no · L7: a little (path/host) | Yes — deeply (paths, methods, payloads, API keys) |
+| **Typical position** | At the edge, *and* between tiers | Behind the edge LB, in front of services |
+| **Operates at** | L4 or L7 | L7 only (it's API-specific) |
+| **Examples** | HAProxy, NLB/ALB, Maglev, Nginx | Kong, Apigee, AWS API Gateway, Spring Cloud Gateway |
+| **One-liner** | "Spread the traffic." | "Govern the API, then route it." |
+
+**Rule of thumb:** if you just have multiple copies of one service, you need a **load balancer**. The moment you have *many different services* fronted by *one public API* — with auth, quotas, and per-route rules — you want an **API gateway** (with a load balancer in front of it).
 
 ---
 
